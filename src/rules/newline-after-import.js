@@ -43,6 +43,10 @@ function isClassWithDecorator(node) {
   return node.type === 'ClassDeclaration' && node.decorators && node.decorators.length
 }
 
+function isExportDefaultClass(node) {
+  return node.type === 'ExportDefaultDeclaration' && node.declaration.type === 'ClassDeclaration'
+}
+
 module.exports = {
   meta: {
     type: 'layout',
@@ -68,7 +72,13 @@ module.exports = {
     const requireCalls = []
 
     function checkForNewLine(node, nextNode, type) {
-      if (isClassWithDecorator(nextNode)) {
+      if (isExportDefaultClass(nextNode)) {
+        let classNode = nextNode.declaration
+
+        if (isClassWithDecorator(classNode)) {
+          nextNode = classNode.decorators[0]
+        }
+      } else if (isClassWithDecorator(nextNode)) {
         nextNode = nextNode.decorators[0]
       }
 
@@ -105,16 +115,24 @@ after ${type} statement not followed by another ${type}.`,
       level--
     }
 
-    return {
-      ImportDeclaration: function (node) {
+    function checkImport(node) {
         const { parent } = node
         const nodePosition = parent.body.indexOf(node)
         const nextNode = parent.body[nodePosition + 1]
+        
+        // skip "export import"s
+        if (node.type === 'TSImportEqualsDeclaration' && node.isExport) {
+          return
+        }
 
-        if (nextNode && nextNode.type !== 'ImportDeclaration') {
+        if (nextNode && nextNode.type !== 'ImportDeclaration' && (nextNode.type !== 'TSImportEqualsDeclaration' || nextNode.isExport)) {
           checkForNewLine(node, nextNode, 'import')
         }
-      },
+    }
+
+    return {
+      ImportDeclaration: checkImport,
+      TSImportEqualsDeclaration: checkImport,
       CallExpression: function(node) {
         if (isStaticRequire(node) && level === 0) {
           requireCalls.push(node)

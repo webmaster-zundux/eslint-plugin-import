@@ -1,4 +1,7 @@
 import { RuleTester } from 'eslint'
+import flatMap from 'array.prototype.flatmap'
+
+import { getTSParsers } from '../utils'
 
 const IMPORT_ERROR_MESSAGE = 'Expected 1 empty line after import statement not followed by another import.'
 const IMPORT_ERROR_MESSAGE_MULTIPLE = (count) => {
@@ -165,6 +168,70 @@ ruleTester.run('newline-after-import', require('rules/newline-after-import'), {
       parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
       parser: require.resolve('babel-eslint'),
     },
+    {
+      code : `// issue 1004\nimport foo from 'foo';\n\n@SomeDecorator(foo)\nexport default class Test {}`,
+      parserOptions: { sourceType: 'module' },
+      parser: require.resolve('babel-eslint'),
+    },
+    {
+      code : `// issue 1004\nconst foo = require('foo');\n\n@SomeDecorator(foo)\nexport default class Test {}`,
+      parserOptions: { sourceType: 'module' },
+      parser: require.resolve('babel-eslint'),
+    },
+    ...flatMap(getTSParsers(), (parser) => [
+      {
+        code: `
+          import { ExecaReturnValue } from 'execa';
+          import execa = require('execa');
+        `,
+        parser: parser,
+        parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
+      },
+      {
+        code: `
+          import execa = require('execa');
+          import { ExecaReturnValue } from 'execa';
+        `,
+        parser: parser,
+        parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
+      },
+      {
+        code: `
+          import { ExecaReturnValue } from 'execa';
+          import execa = require('execa');
+          import { ExecbReturnValue } from 'execb';
+        `,
+        parser: parser,
+        parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
+      },
+      {
+        code: `
+          import execa = require('execa');
+          import { ExecaReturnValue } from 'execa';
+          import execb = require('execb');
+        `,
+        parser: parser,
+        parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
+      },
+      {
+        code: `
+          export import a = obj;\nf(a);
+        `,
+        parser: parser,
+        parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
+      },
+      {
+        code: `
+          import { a } from "./a";
+
+          export namespace SomeNamespace {
+              export import a2 = a;
+              f(a);
+          }`,
+        parser: parser,
+        parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
+      },
+    ]),
   ],
 
   invalid: [
@@ -338,6 +405,28 @@ ruleTester.run('newline-after-import', require('rules/newline-after-import'), {
         message: REQUIRE_ERROR_MESSAGE,
       } ],
       parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
+      parser: require.resolve('babel-eslint'),
+    },
+    {
+      code: `// issue 10042\nimport foo from 'foo';\n@SomeDecorator(foo)\nexport default class Test {}`,
+      output: `// issue 10042\nimport foo from 'foo';\n\n@SomeDecorator(foo)\nexport default class Test {}`,
+      errors: [ {
+        line: 2,
+        column: 1,
+        message: IMPORT_ERROR_MESSAGE,
+      } ],
+      parserOptions: { sourceType: 'module' },
+      parser: require.resolve('babel-eslint'),
+    },
+    {
+      code: `// issue 1004\nconst foo = require('foo');\n@SomeDecorator(foo)\nexport default class Test {}`,
+      output: `// issue 1004\nconst foo = require('foo');\n\n@SomeDecorator(foo)\nexport default class Test {}`,
+      errors: [ {
+        line: 2,
+        column: 1,
+        message: REQUIRE_ERROR_MESSAGE,
+      } ],
+      parserOptions: { sourceType: 'module' },
       parser: require.resolve('babel-eslint'),
     },
   ],

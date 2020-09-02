@@ -1,8 +1,9 @@
-import { test, getTSParsers } from '../utils'
+import { test, getTSParsers, getNonDefaultParsers } from '../utils'
 
 import { RuleTester } from 'eslint'
 import eslintPkg from 'eslint/package.json'
 import semver from 'semver'
+import flatMap from 'array.prototype.flatmap'
 
 const ruleTester = new RuleTester()
     , rule = require('rules/order')
@@ -167,6 +168,29 @@ ruleTester.run('order', rule, {
         var index = require('./');
       `,
     }),
+    ...flatMap(getTSParsers(), parser => [
+      // Export equals expressions should be on top alongside with ordinary import-statements.
+      test({
+        code: `
+          import async, {foo1} from 'async';
+          import relParent2, {foo2} from '../foo/bar';
+          import sibling, {foo3} from './foo';
+          var fs = require('fs');
+          var util = require("util");
+          var relParent1 = require('../foo');
+          var relParent3 = require('../');
+          var index = require('./');
+        `,
+        parser,
+      }),
+
+      test({
+        code: `
+          export import CreateSomething = _CreateSomething;
+        `,
+        parser,
+      }),
+    ]),
     // Adding unknown import types (e.g. using a resolver alias via babel) to the groups.
     test({
       code: `
@@ -687,6 +711,78 @@ ruleTester.run('order', rule, {
         },
       ],
     }),
+    ...flatMap(getTSParsers, parser => [
+      // Order of the `import ... = require(...)` syntax
+      test({
+        code: `
+          import blah = require('./blah');
+          import { hello } from './hello';`,
+        parser,
+        options: [
+          {
+            alphabetize: {
+              order: 'asc',
+            },
+          },
+        ],
+      }),
+      // Order of object-imports
+      test({
+        code: `
+          import blah = require('./blah');
+          import log = console.log;`,
+        parser,
+        options: [
+          {
+            alphabetize: {
+              order: 'asc',
+            },
+          },
+        ],
+      }),
+      // Object-imports should not be forced to be alphabetized
+      test({
+        code: `
+          import debug = console.debug;
+          import log = console.log;`,
+        parser,
+        options: [
+          {
+            alphabetize: {
+              order: 'asc',
+            },
+          },
+        ],
+      }),
+      test({
+        code: `
+          import log = console.log;
+          import debug = console.debug;`,
+        parser,
+        options: [
+          {
+            alphabetize: {
+              order: 'asc',
+            },
+          },
+        ],
+      }),
+      test({
+        code: `
+          import { a } from "./a";
+          export namespace SomeNamespace {
+              export import a2 = a;
+          }
+        `,
+        parser,
+        options: [
+          {
+            groups: ['external', 'index'],
+            alphabetize: { order: 'asc' },
+          },
+        ],
+      }),
+    ]),
   ],
   invalid: [
     // builtin before external module (require)
@@ -1142,6 +1238,71 @@ ruleTester.run('order', rule, {
         message: '`fs` import should occur after import of `../foo/bar`',
       }],
     }),
+    ...flatMap(getTSParsers(), parser => [
+      // Order of the `import ... = require(...)` syntax
+      test({
+        code: `
+          var fs = require('fs');
+          import async, {foo1} from 'async';
+          import bar = require("../foo/bar");
+        `,
+        output: `
+          import async, {foo1} from 'async';
+          import bar = require("../foo/bar");
+          var fs = require('fs');
+        `,
+        parser,
+        errors: [{
+          message: '`fs` import should occur after import of `../foo/bar`',
+        }],
+      }),
+      test({
+        code: `
+          var async = require('async');
+          var fs = require('fs');
+        `,
+        output: `
+          var fs = require('fs');
+          var async = require('async');
+        `,
+        parser,
+        errors: [{
+          message: '`fs` import should occur before import of `async`',
+        }],
+      }),
+      test({
+        code: `
+          import sync = require('sync');
+          import async, {foo1} from 'async';
+
+          import index from './';
+        `,
+        output: `
+          import async, {foo1} from 'async';
+          import sync = require('sync');
+
+          import index from './';
+        `,
+        options: [{
+          groups: ['external', 'index'],
+          alphabetize: {order: 'asc'},
+        }],
+        parser,
+        errors: [{
+          message: '`async` import should occur before import of `sync`',
+        }],
+      }),
+      // Order of object-imports
+      test({
+        code: `
+          import log = console.log;
+          import blah = require('./blah');`,
+        parser,
+        errors: [{
+          message: '`./blah` import should occur before import of `console.log`',
+        }],
+      }),
+    ]),
     // Default order using import with custom import alias
     test({
       code: `
@@ -1875,20 +2036,6 @@ ruleTester.run('order', rule, {
         message: '`fs` import should occur before import of `async`',
       }],
     })),
-    ...getTSParsers().map(parser => ({
-      code: `
-        var async = require('async');
-        var fs = require('fs');
-      `,
-      output: `
-        var fs = require('fs');
-        var async = require('async');
-      `,
-      parser,
-      errors: [{
-        message: '`fs` import should occur before import of `async`',
-      }],
-    })),
     // Option alphabetize: {order: 'asc'}
     test({
       code: `
@@ -2013,7 +2160,7 @@ ruleTester.run('order', rule, {
           const { cello } = require('./cello');
           const blah = require('./blah');
           import { hello } from './hello';
-        `, 
+        `,
         errors: [{
           message: '`./int` import should occur before import of `./cello`',
         }, {
@@ -2022,4 +2169,144 @@ ruleTester.run('order', rule, {
       }),
     ],
   ].filter((t) => !!t),
+})
+
+
+context('TypeScript', function () {
+  getNonDefaultParsers()
+    .filter((parser) => parser !== require.resolve('typescript-eslint-parser'))
+    .forEach((parser) => {
+      const parserConfig = {
+        parser: parser,
+        settings: {
+          'import/parsers': { [parser]: ['.ts'] },
+          'import/resolver': { 'eslint-import-resolver-typescript': true },
+        },
+      }
+
+      ruleTester.run('order', rule, {
+        valid: [
+          // #1667: typescript type import support
+
+          // Option alphabetize: {order: 'asc'}
+          test(
+            {
+              code: `
+                import c from 'Bar';
+                import type { C } from 'Bar';
+                import b from 'bar';
+                import a from 'foo';
+                import type { A } from 'foo';
+
+                import index from './';
+              `,
+              parser,
+              options: [
+                {
+                  groups: ['external', 'index'],
+                  alphabetize: { order: 'asc' },
+                },
+              ],
+            },
+            parserConfig,
+          ),
+          // Option alphabetize: {order: 'desc'}
+          test(
+            {
+              code: `
+                import a from 'foo';
+                import type { A } from 'foo';
+                import b from 'bar';
+                import c from 'Bar';
+                import type { C } from 'Bar';
+
+                import index from './';
+              `,
+              parser,
+              options: [
+                {
+                  groups: ['external', 'index'],
+                  alphabetize: { order: 'desc' },
+                },
+              ],
+            },
+            parserConfig,
+          ),
+        ],
+        invalid: [
+          // Option alphabetize: {order: 'asc'}
+          test(
+            {
+              code: `
+              import b from 'bar';
+              import c from 'Bar';
+              import type { C } from 'Bar';
+              import a from 'foo';
+              import type { A } from 'foo';
+
+              import index from './';
+            `,
+              output: `
+              import c from 'Bar';
+              import type { C } from 'Bar';
+              import b from 'bar';
+              import a from 'foo';
+              import type { A } from 'foo';
+
+              import index from './';
+            `,
+              parser,
+              options: [
+                {
+                  groups: ['external', 'index'],
+                  alphabetize: { order: 'asc' },
+                },
+              ],
+              errors: [
+                {
+                  message: process.env.ESLINT_VERSION === '2' ? '`bar` import should occur after import of `Bar`' : /(`bar` import should occur after import of `Bar`)|(`Bar` import should occur before import of `bar`)/,
+                },
+              ],
+            },
+            parserConfig,
+          ),
+          // Option alphabetize: {order: 'desc'}
+          test(
+            {
+              code: `
+              import a from 'foo';
+              import type { A } from 'foo';
+              import c from 'Bar';
+              import type { C } from 'Bar';
+              import b from 'bar';
+
+              import index from './';
+            `,
+              output: `
+              import a from 'foo';
+              import type { A } from 'foo';
+              import b from 'bar';
+              import c from 'Bar';
+              import type { C } from 'Bar';
+
+              import index from './';
+            `,
+              parser,
+              options: [
+                {
+                  groups: ['external', 'index'],
+                  alphabetize: { order: 'desc' },
+                },
+              ],
+              errors: [
+                {
+                  message: process.env.ESLINT_VERSION === '2' ? '`bar` import should occur before import of `Bar`' : /(`bar` import should occur before import of `Bar`)|(`Bar` import should occur after import of `bar`)/,
+                },
+              ],
+            },
+            parserConfig,
+          ),
+        ],
+      })
+    })
 })

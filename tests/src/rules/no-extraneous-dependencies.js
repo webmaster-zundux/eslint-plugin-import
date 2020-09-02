@@ -1,10 +1,16 @@
-import { test } from '../utils'
-import * as path from 'path'
-import * as fs from 'fs'
+import { getTSParsers, test, testFilePath } from '../utils'
+import typescriptConfig from '../../../config/typescript'
+import path from 'path'
+import fs from 'fs'
+import semver from 'semver'
+import eslintPkg from 'eslint/package.json'
 
 import { RuleTester } from 'eslint'
+import flatMap from 'array.prototype.flatmap'
+
 const ruleTester = new RuleTester()
-    , rule = require('rules/no-extraneous-dependencies')
+const typescriptRuleTester = new RuleTester(typescriptConfig)
+const rule = require('rules/no-extraneous-dependencies')
 
 const packageDirWithSyntaxError = path.join(__dirname, '../../files/with-syntax-error')
 const packageFileWithSyntaxErrorMessage = (() => {
@@ -15,6 +21,7 @@ const packageFileWithSyntaxErrorMessage = (() => {
   }
 })()
 const packageDirWithFlowTyped = path.join(__dirname, '../../files/with-flow-typed')
+const packageDirWithTypescriptDevDependencies = path.join(__dirname, '../../files/with-typescript-dev-dependencies')
 const packageDirMonoRepoRoot = path.join(__dirname, '../../files/monorepo')
 const packageDirMonoRepoWithNested = path.join(__dirname, '../../files/monorepo/packages/nested-package')
 const packageDirWithEmpty = path.join(__dirname, '../../files/empty')
@@ -22,21 +29,25 @@ const packageDirBundleDeps = path.join(__dirname, '../../files/bundled-dependenc
 const packageDirBundledDepsAsObject = path.join(__dirname, '../../files/bundled-dependencies/as-object')
 const packageDirBundledDepsRaceCondition = path.join(__dirname, '../../files/bundled-dependencies/race-condition')
 
+const {
+  dependencies: deps,
+  devDependencies: devDeps,
+} = require('../../files/package.json')
+
 ruleTester.run('no-extraneous-dependencies', rule, {
   valid: [
-    test({ code: 'import "lodash.cond"'}),
-    test({ code: 'import "pkg-up"'}),
-    test({ code: 'import foo, { bar } from "lodash.cond"'}),
-    test({ code: 'import foo, { bar } from "pkg-up"'}),
+    ...flatMap(Object.keys(deps).concat(Object.keys(devDeps)), (pkg) => [
+      test({ code: `import "${pkg}"` }),
+      test({ code: `import foo, { bar } from "${pkg}"` }),
+      test({ code: `require("${pkg}")` }),
+      test({ code: `var foo = require("${pkg}")` }),
+      test({ code: `export { foo } from "${pkg}"` }),
+      test({ code: `export * from "${pkg}"` }),
+    ]),
     test({ code: 'import "eslint"'}),
     test({ code: 'import "eslint/lib/api"'}),
-    test({ code: 'require("lodash.cond")'}),
-    test({ code: 'require("pkg-up")'}),
-    test({ code: 'var foo = require("lodash.cond")'}),
-    test({ code: 'var foo = require("pkg-up")'}),
     test({ code: 'import "fs"'}),
     test({ code: 'import "./foo"'}),
-    test({ code: 'import "lodash.isarray"'}),
     test({ code: 'import "@org/package"'}),
 
     test({ code: 'import "electron"', settings: { 'import/core-modules': ['electron'] } }),
@@ -113,8 +124,6 @@ ruleTester.run('no-extraneous-dependencies', rule, {
       code: 'import foo from "@generated/foo"',
       options: [{packageDir: packageDirBundledDepsRaceCondition}],
     }),
-    test({ code: 'export { foo } from "lodash.cond"' }),
-    test({ code: 'export * from "lodash.cond"' }),
     test({ code: 'export function getToken() {}' }),
     test({ code: 'export class Component extends React.Component {}' }),
     test({ code: 'export function Component() {}' }),
@@ -308,3 +317,74 @@ ruleTester.run('no-extraneous-dependencies', rule, {
     }),
   ],
 })
+
+describe('TypeScript', function () {
+  getTSParsers().forEach((parser) => {
+    const parserConfig = {
+      parser: parser,
+      settings: {
+        'import/parsers': { [parser]: ['.ts'] },
+        'import/resolver': { 'eslint-import-resolver-typescript': true },
+      },
+    }
+
+    if (parser !== require.resolve('typescript-eslint-parser')) {
+      ruleTester.run('no-extraneous-dependencies', rule, {
+        valid: [
+          test(Object.assign({
+            code: 'import type { JSONSchema7Type } from "@types/json-schema";',
+            options: [{packageDir: packageDirWithTypescriptDevDependencies, devDependencies: false }],
+          }, parserConfig)),
+        ],
+        invalid: [
+          test(Object.assign({
+            code: 'import { JSONSchema7Type } from "@types/json-schema";',
+            options: [{packageDir: packageDirWithTypescriptDevDependencies, devDependencies: false }],
+            errors: [{
+              message: "'@types/json-schema' should be listed in the project's dependencies, not devDependencies.",
+            }],
+          }, parserConfig)),
+        ],
+      })
+    } else {
+      ruleTester.run('no-extraneous-dependencies', rule, {
+        valid: [],
+        invalid: [
+          test(Object.assign({
+            code: 'import { JSONSchema7Type } from "@types/json-schema";',
+            options: [{packageDir: packageDirWithTypescriptDevDependencies, devDependencies: false }],
+            errors: [{
+              message: "'@types/json-schema' should be listed in the project's dependencies, not devDependencies.",
+            }],
+          }, parserConfig)),
+          test(Object.assign({
+            code: 'import type { JSONSchema7Type } from "@types/json-schema";',
+            options: [{packageDir: packageDirWithTypescriptDevDependencies, devDependencies: false }],
+            errors: [{
+              message: "'@types/json-schema' should be listed in the project's dependencies, not devDependencies.",
+            }],
+          }, parserConfig)),
+        ],
+      })
+    }
+  })
+})
+
+if (semver.satisfies(eslintPkg.version, '>5.0.0')) {
+  typescriptRuleTester.run('no-extraneous-dependencies typescript type imports', rule, {
+    valid: [
+      test({
+        code: 'import type MyType from "not-a-dependency";',
+        filename: testFilePath('./no-unused-modules/typescript/file-ts-a.ts'),
+        parser: require.resolve('babel-eslint'),
+      }),
+      test({
+        code: 'import type { MyType } from "not-a-dependency";',
+        filename: testFilePath('./no-unused-modules/typescript/file-ts-a.ts'),
+        parser: require.resolve('babel-eslint'),
+      }),
+    ],
+    invalid: [
+    ],
+  })
+}
